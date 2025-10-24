@@ -1,0 +1,1 @@
+# Placeholder - setup.sh fetches SOCKS5 proxies
