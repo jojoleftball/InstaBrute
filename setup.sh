@@ -51,8 +51,15 @@ curl -s https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeo
 if [ -s proxies/free_proxies.txt ]; then
     echo -e "$green[+] Proxies fetched! [$green✓$nc]$nc"
 else
-    echo -e "$red[!] Proxy fetch failed! Check network.$nc"
-    exit 1
+    echo -e "$red[!] Proxy fetch failed! Using Tor proxies as fallback.$nc"
+    cat > proxies/free_proxies.txt << EOF
+socks5://127.0.0.1:9050
+socks5://127.0.0.1:9052
+socks5://127.0.0.1:9054
+socks5://127.0.0.1:9056
+socks5://127.0.0.1:9058
+EOF
+    echo -e "$green[+] Tor proxies added to free_proxies.txt! [$green✓$nc]$nc"
 fi
 
 # Create config
