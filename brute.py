@@ -450,7 +450,7 @@ def main():
         for future in futures:
             future.result()
 
-    print(f"{Colors.GREEN}[+] Brute-force complete! Check hits/cracked.txt{Colors.NC}")
+    print(f"{Colors.GREEN}[+] Bruteforce complete! Check hits/cracked.txt{Colors.NC}")
 
 if __name__ == "__main__":
     main()
